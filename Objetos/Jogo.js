@@ -40,7 +40,11 @@ class Jogo{
 
     }
   }
-
+  //funcao para limpar a mao dos jogadores
+  limparMaoJogadores(){
+    this.jogador1.mao.limparMao();
+    this.jogador2.mao.limparMao();
+  }
 
 
 }

@@ -5,8 +5,10 @@ window.onload = () => {
   const form = document.getElementById('form');
   const pedirCartaBtn = document.getElementById('pedirCarta');
   const reiniciarJogoBtn = document.getElementById('reiniciarJogo');
+  const criarSalaBtn = document.getElementById('criarSala');
+  const salasDiv = document.getElementById('salasDisponiveis');
 
-  if (!form || !pedirCartaBtn || !reiniciarJogoBtn) {
+  if (!form || !pedirCartaBtn || !reiniciarJogoBtn || !criarSalaBtn || !salasDiv) {
     console.error('Elementos necessários não encontrados no DOM.');
     return;
   }
@@ -22,6 +24,7 @@ window.onload = () => {
     if (data && data.players) {
       atualizarDadosJogo(data);
       reiniciarJogoBtn.style.display = 'none'; // Esconde o botão de reinício após o início do jogo
+      esconderElementosSala(); // Esconde os elementos de sala após o início do jogo
     } else {
       console.error('Dados inválidos recebidos:', data);
     }
@@ -64,9 +67,6 @@ window.onload = () => {
       reiniciarJogoBtn.style.display = 'block';
     }
   }
-  
-
-
 
   pedirCartaBtn.onclick = () => {
     socket.emit('pedirCarta');
@@ -87,4 +87,45 @@ window.onload = () => {
     reiniciarJogoBtn.style.display = 'none'; // Esconde o botão de reinício
     document.getElementById('form').style.display = 'block'; // Reexibir o formulário
   }
+
+  criarSalaBtn.onclick = () => {
+    socket.emit('criarSala', meuNome);
+  };
+
+  socket.on('SalasDisponiveis', (salas) => {
+    atualizarListaSalas(salas);
+  });
+
+  socket.on('novaSalaCriada', (sala) => {
+    adicionarSala(sala);
+  });
+
+  socket.on('atualizarSalas', (salas) => {
+    atualizarListaSalas(salas);
+  });
+
+  function atualizarListaSalas(salas) {
+    salasDiv.innerHTML = '';
+    for (let id in salas) {
+      adicionarSala({ id, jogadores: Object.values(salas[id].players).map(player => player.nome) });
+    }
+  }
+
+  function adicionarSala(sala) {
+    const salaDiv = document.createElement('div');
+    salaDiv.innerHTML = `Sala: ${sala.id}, Jogadores: ${sala.jogadores.join(', ')}`;
+    const entrarBtn = document.createElement('button');
+    entrarBtn.innerText = 'Entrar';
+    entrarBtn.onclick = () => {
+      socket.emit('entrarSala', { nomeJogador: meuNome, salaId: sala.id });
+    };
+    salaDiv.appendChild(entrarBtn);
+    salasDiv.appendChild(salaDiv);
+  }
+
+  function esconderElementosSala() {
+    criarSalaBtn.style.display = 'none'; // Esconde o botão de criar sala
+    salasDiv.style.display = 'none'; // Esconde a lista de salas
+  }
+
 };

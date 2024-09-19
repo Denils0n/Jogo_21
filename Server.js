@@ -13,105 +13,147 @@ app.get('/', (req, res) => {
   res.sendFile(__dirname + '/Public/index.html');
 });
 
-// Variáveis para armazenar os dois jogadores e o estado do jogo
-let players = {};
-let jogoAtivo = false;
-let jogo = null; // Adiciona uma variável para armazenar o jogo
+// Variáveis para armazenar salas e o estado dos jogos
+let salas = {};
+let salaCount = 0;
 
 io.on('connection', (socket) => {
   console.log('Novo jogador conectado: ' + socket.id);
 
-  // Receber nome do jogador
-  socket.on('Jogador', (nomeJogador) => {
-    if (Object.keys(players).length < 2) {
-      players[socket.id] = {
-        nome: nomeJogador,
-        id: socket.id,
-        jogadorNum: Object.keys(players).length + 1, // Jogador 1 ou Jogador 2
-      };
+  // Quando um jogador entra no jogo
+  socket.on('Jogador', (nome) => {
+    console.log('Jogador adicionado:', nome);
 
-      console.log(`Jogador ${players[socket.id].jogadorNum} (${nomeJogador}) entrou no jogo`);
+    // Enviar a lista de salas disponíveis
+    socket.emit('SalasDisponiveis', salas);
+  });
 
-      // Verificar se dois jogadores estão conectados para iniciar o jogo
-      if (Object.keys(players).length === 2) {
-        iniciarJogo();
+  // Quando um jogador cria uma sala
+  socket.on('criarSala', (nomeJogador) => {
+    salaCount++;
+    const salaId = `sala-${salaCount}`;
+    const salaAtual = { id: salaId, players: {}, jogoAtivo: false, jogo: null };
+    salas[salaId] = salaAtual;
+
+    // Adicionar o jogador à sala criada
+    salaAtual.players[socket.id] = { nome: nomeJogador, id: socket.id, jogadorNum: 1 };
+    socket.join(salaId);
+    console.log(`Sala ${salaId} criada por ${nomeJogador}`);
+
+    // Emitir evento para todos os jogadores sobre a nova sala
+    io.emit('novaSalaCriada', { id: salaId, jogadores: [nomeJogador] });
+  });
+
+  // Quando um jogador entra em uma sala
+  socket.on('entrarSala', ({ nomeJogador, salaId }) => {
+    const sala = salas[salaId];
+
+    if (sala && Object.keys(sala.players).length < 2) {
+      const numJogadores = Object.keys(sala.players).length + 1;
+      sala.players[socket.id] = { nome: nomeJogador, id: socket.id, jogadorNum: numJogadores };
+      socket.join(salaId);
+      console.log(`${nomeJogador} entrou na sala ${salaId}`);
+
+      // Verificar se a sala está cheia e iniciar o jogo
+      if (Object.keys(sala.players).length === 2) {
+        iniciarJogo(sala);
       }
+
+      // Atualizar todos os jogadores sobre o novo jogador na sala
+      io.emit('atualizarSalas', salas);
     } else {
-      socket.emit('JogoCheio', 'O jogo já tem dois jogadores.');
+      socket.emit('erroSala', 'Sala cheia ou inexistente.');
     }
   });
 
   // Quando um jogador se desconecta
   socket.on('disconnect', () => {
     console.log('Jogador desconectado: ' + socket.id);
-    delete players[socket.id];
 
-    // Parar o jogo se um jogador desconectar
-    if (Object.keys(players).length < 2) {
-      jogoAtivo = false;
-      io.emit('JogoParado', 'Um jogador desconectou. O jogo foi interrompido.');
+    // Remover jogador de sua sala
+    for (let idSala in salas) {
+      if (salas[idSala].players[socket.id]) {
+        delete salas[idSala].players[socket.id];
+
+        // Parar o jogo se houver menos de 2 jogadores na sala
+        if (Object.keys(salas[idSala].players).length < 2 && salas[idSala].jogoAtivo) {
+          salas[idSala].jogoAtivo = false;
+          io.to(idSala).emit('JogoParado', 'Um jogador desconectou. O jogo foi interrompido.');
+        }
+
+        // Remover a sala se não houver mais jogadores
+        if (Object.keys(salas[idSala].players).length === 0) {
+          delete salas[idSala];
+          console.log(`Sala ${idSala} foi removida.`);
+        }
+
+        break;
+      }
     }
+    io.emit('atualizarSalas', salas); // Atualizar lista de salas para todos os jogadores
   });
 
   // Evento para pedir uma carta
   socket.on('pedirCarta', () => {
-    console.log('Evento pedirCarta recebido do jogador:', socket.id);
-  
-    if (jogoAtivo && players[socket.id]) {
-      const jogadorAtual = players[socket.id].jogadorNum === 1 ? jogo.getJogador1() : jogo.getJogador2();
+    let salaAtual = null;
+
+    // Encontrar a sala do jogador
+    for (let idSala in salas) {
+      if (salas[idSala].players[socket.id]) {
+        salaAtual = salas[idSala];
+        break;
+      }
+    }
+
+    if (salaAtual && salaAtual.jogoAtivo) {
+      const jogadorAtual = salaAtual.players[socket.id].jogadorNum === 1 ? salaAtual.jogo.getJogador1() : salaAtual.jogo.getJogador2();
       jogadorAtual.adicionarCarta(); // Adiciona uma carta ao jogador
       console.log('Carta adicionada. Atualizando o estado do jogo...');
-      
-      // Atualizar estado do jogo e emitir para todos os clientes
-      io.emit('atualizarJogo', {
+
+      // Atualizar estado do jogo e emitir para todos os clientes da sala
+      io.to(salaAtual.id).emit('atualizarJogo', {
         players: {
           jogador1: {
-            nome: jogo.getJogador1().nome,
-            cartas: jogo.getJogador1().mao.mostrarCartas(),
-            somaCartas: jogo.getJogador1().mao.mostrarValor()
+            nome: salaAtual.jogo.getJogador1().nome,
+            cartas: salaAtual.jogo.getJogador1().mao.mostrarCartas(),
+            somaCartas: salaAtual.jogo.getJogador1().mao.mostrarValor()
           },
           jogador2: {
-            nome: jogo.getJogador2().nome,
-            cartas: jogo.getJogador2().mao.mostrarCartas(),
-            somaCartas: jogo.getJogador2().mao.mostrarValor()
+            nome: salaAtual.jogo.getJogador2().nome,
+            cartas: salaAtual.jogo.getJogador2().mao.mostrarCartas(),
+            somaCartas: salaAtual.jogo.getJogador2().mao.mostrarValor()
           }
         }
       });
     } else {
-      console.log('Jogo não está ativo ou jogador não encontrado.');
-      socket.emit('foraDeTurno', 'Não é sua vez de jogar.');
+      socket.emit('foraDeTurno', 'Jogo não está ativo ou jogador não encontrado.');
     }
   });
 });
 
-function iniciarJogo() {
-  jogoAtivo = true; // Começar o jogo
-  console.log('Jogo iniciado entre os dois jogadores:');
+function iniciarJogo(sala) {
+  sala.jogoAtivo = true;
+  console.log(`Jogo iniciado na ${sala.id}`);
 
-  const playerSockets = Object.keys(players); // Pega os IDs dos jogadores
-  const jogador1 = players[playerSockets[0]]; // Primeiro jogador
-  const jogador2 = players[playerSockets[1]]; // Segundo jogador
-  console.log('Jogador1:' + players[playerSockets[0]].nome);
+  const playerSockets = Object.keys(sala.players);
+  const jogador1 = sala.players[playerSockets[0]];
+  const jogador2 = sala.players[playerSockets[1]];
 
-  console.log(`${jogador1.nome} vs ${jogador2.nome}`);
+  sala.jogo = new Jogo(jogador1.nome, jogador2.nome);
 
-  jogo = new Jogo(jogador1.nome, jogador2.nome); // Inicializa a variável jogo
-
-  // Enviar o estado inicial do jogo para o cliente
-  io.emit('JogoIniciado', {
+  io.to(sala.id).emit('JogoIniciado', {
     players: {
       jogador1: {
-        nome: jogo.getJogador1().nome,
-        cartas: jogo.getJogador1().mao.mostrarCartas(),
-        somaCartas: jogo.getJogador1().mao.mostrarValor()
+        nome: sala.jogo.getJogador1().nome,
+        cartas: sala.jogo.getJogador1().mao.mostrarCartas(),
+        somaCartas: sala.jogo.getJogador1().mao.mostrarValor()
       },
       jogador2: {
-        nome: jogo.getJogador2().nome,
-        cartas: jogo.getJogador2().mao.mostrarCartas(),
-        somaCartas: jogo.getJogador2().mao.mostrarValor()
+        nome: sala.jogo.getJogador2().nome,
+        cartas: sala.jogo.getJogador2().mao.mostrarCartas(),
+        somaCartas: sala.jogo.getJogador2().mao.mostrarValor()
       }
-    },
-
+    }
   });
 }
 
